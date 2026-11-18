@@ -11,6 +11,57 @@ const generateToken = (userId) => {
   );
 };
 
+// Full name validation
+const validateName = (name) => {
+  const trimmedName = name.trim();
+
+  const nameRegex =
+    /^[A-Za-z]+(?:[ '-][A-Za-z]+)*\s+[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
+
+  if (!nameRegex.test(trimmedName)) {
+    return false;
+  }
+
+  const nameParts = trimmedName.split(/\s+/);
+
+  for (const part of nameParts) {
+    const normalizedPart = part.toLowerCase();
+
+    if (!/[aeiou]/.test(normalizedPart)) {
+      return false;
+    }
+
+    if (/[bcdfghjklmnpqrstvwxyz]{3,}/i.test(normalizedPart)) {
+      return false;
+    }
+
+    if (/(.)\1{2,}/i.test(normalizedPart)) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+// Email validation
+const validateEmail = (email) => {
+  const emailRegex =
+    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+
+  return emailRegex.test(email.trim());
+};
+
+// Strong password validation
+const validatePassword = (password) => {
+  return (
+    password.length >= 8 &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+};
+
 // REGISTER USER
 const registerUser = async (req, res) => {
   try {
@@ -18,7 +69,7 @@ const registerUser = async (req, res) => {
 
     if (!name || !email || !password) {
       return res.status(400).json({
-        message: "Please provide name, email and password",
+        message: "Please provide your full name, email and password.",
       });
     }
 
@@ -28,31 +79,32 @@ const registerUser = async (req, res) => {
       typeof password !== "string"
     ) {
       return res.status(400).json({
-        message: "Invalid input format",
+        message: "Invalid input format.",
       });
     }
 
-    if (name.trim().length < 2) {
-      return res.status(400).json({
-        message: "Name must contain at least 2 characters",
-      });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!emailRegex.test(email.trim())) {
-      return res.status(400).json({
-        message: "Please enter a valid email address",
-      });
-    }
-
-    if (password.length < 8) {
-      return res.status(400).json({
-        message: "Password must be at least 8 characters long",
-      });
-    }
-
+    const cleanName = name.trim();
     const normalizedEmail = email.trim().toLowerCase();
+
+    if (!validateName(cleanName)) {
+      return res.status(400).json({
+        message:
+          "Please enter a valid full name. Avoid random letters, numbers and symbols.",
+      });
+    }
+
+    if (!validateEmail(normalizedEmail)) {
+      return res.status(400).json({
+        message: "Please enter a valid email address.",
+      });
+    }
+
+    if (!validatePassword(password)) {
+      return res.status(400).json({
+        message:
+          "Password must contain at least 8 characters, one uppercase letter, one lowercase letter, one number and one special character.",
+      });
+    }
 
     const existingUser = await User.findOne({
       email: normalizedEmail,
@@ -60,12 +112,12 @@ const registerUser = async (req, res) => {
 
     if (existingUser) {
       return res.status(409).json({
-        message: "An account with this email already exists",
+        message: "An account with this email already exists.",
       });
     }
 
     const user = await User.create({
-      name: name.trim(),
+      name: cleanName,
       email: normalizedEmail,
       password,
     });
@@ -84,6 +136,12 @@ const registerUser = async (req, res) => {
   } catch (error) {
     console.error("Registration Error:", error.message);
 
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "An account with this email already exists.",
+      });
+    }
+
     return res.status(500).json({
       message: "Registration failed. Please try again.",
     });
@@ -97,7 +155,7 @@ const loginUser = async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({
-        message: "Please provide email and password",
+        message: "Please provide email and password.",
       });
     }
 
@@ -106,33 +164,33 @@ const loginUser = async (req, res) => {
       typeof password !== "string"
     ) {
       return res.status(400).json({
-        message: "Invalid input format",
+        message: "Invalid input format.",
       });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
 
+    if (!validateEmail(normalizedEmail)) {
+      return res.status(400).json({
+        message: "Please enter a valid email address.",
+      });
+    }
+
     const user = await User.findOne({
       email: normalizedEmail,
     });
 
-    // Diagnostic 1: Check whether the user exists
-    console.log("Login email found:", Boolean(user));
-
     if (!user) {
       return res.status(401).json({
-        message: "Invalid email or password",
+        message: "Invalid email or password.",
       });
     }
 
     const isPasswordMatch = await user.comparePassword(password);
 
-    // Diagnostic 2: Check whether the password matches
-    console.log("Password matches:", isPasswordMatch);
-
     if (!isPasswordMatch) {
       return res.status(401).json({
-        message: "Invalid email or password",
+        message: "Invalid email or password.",
       });
     }
 
@@ -156,4 +214,7 @@ const loginUser = async (req, res) => {
   }
 };
 
-module.exports = { registerUser, loginUser };
+module.exports = {
+  registerUser,
+  loginUser,
+};

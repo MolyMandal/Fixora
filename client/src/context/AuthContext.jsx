@@ -59,6 +59,57 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
+  // Update logged-in user's profile
+  const updateProfile = async (formData) => {
+    if (!token) {
+      throw new Error("Please login first.");
+    }
+
+    const response = await fetch(`${API_URL}/profile`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(formData),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || "Profile update failed");
+    }
+
+    localStorage.setItem("fixoraUser", JSON.stringify(data.user));
+    setUser(data.user);
+
+    return data;
+  };
+
+  // Change logged-in user's password
+  const changePassword = async (formData) => {
+    if (!token) {
+      throw new Error("Please login first.");
+    }
+
+    const response = await fetch(`${API_URL}/change-password`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(formData),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || "Password change failed");
+    }
+
+    return data;
+  };
+
   // Logout user
   const logout = () => {
     localStorage.removeItem("fixoraToken");
@@ -76,6 +127,8 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated: Boolean(token && user),
         register,
         login,
+        updateProfile,
+        changePassword,
         logout,
       }}
     >

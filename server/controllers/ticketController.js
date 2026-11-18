@@ -3,15 +3,53 @@ const Ticket = require("../models/Ticket");
 const Project = require("../models/Project");
 const User = require("../models/User");
 
-// Create Ticket
+// Check whether a user belongs to a project
+const isProjectMember = (project, userId) => {
+  const userIdString = String(userId);
+
+  const isOwner = String(project.owner) === userIdString;
+
+  const isMember = project.teamMembers.some(
+    (member) => String(member) === userIdString
+  );
+
+  return isOwner || isMember;
+};
+
+// Check whether a user can be assigned to a project ticket
+const isAssignableMember = (project, userId) => {
+  return (
+    String(project.owner) === String(userId) ||
+    project.teamMembers.some(
+      (member) => String(member) === String(userId)
+    )
+  );
+};
+
+// ========================================
+// CREATE TICKET
+// ========================================
+
 const createTicket = async (req, res) => {
   try {
     const { title, description, priority, status, assignee, projectId } =
       req.body;
 
-    if (!title || !projectId) {
+    if (!title || typeof title !== "string" || !title.trim()) {
       return res.status(400).json({
-        message: "Ticket title and project ID are required",
+        message: "Ticket title is required",
+      });
+    }
+
+    if (title.trim().length < 2) {
+      return res.status(400).json({
+        message: "Ticket title must be at least 2 characters",
+      });
+    }
+
+    if (!projectId) {
+      return res.status(400).json({
+        message: "Project ID is required",
       });
     }
 
@@ -23,45 +61,33 @@ const createTicket = async (req, res) => {
       });
     }
 
-    const isOwner = project.owner.toString() === req.user._id.toString();
-
-    const isMember = project.teamMembers.some(
-      (member) => member.toString() === req.user._id.toString()
-    );
-
-    if (!isOwner && !isMember) {
+    if (!isProjectMember(project, req.user._id)) {
       return res.status(403).json({
-        message: "You are not authorized to create tickets for this project",
+        message: "You are not authorized to create tickets in this project",
       });
     }
 
     if (assignee) {
-      const isProjectMember =
-        project.owner.toString() === assignee ||
-        project.teamMembers.some(
-          (member) => member.toString() === assignee
-        );
-
-      if (!isProjectMember) {
+      if (!isAssignableMember(project, assignee)) {
         return res.status(400).json({
           message: "Assignee must belong to this project",
         });
       }
 
-      const userExists = await User.findById(assignee);
+      const assignedUser = await User.findById(assignee);
 
-      if (!userExists) {
+      if (!assignedUser) {
         return res.status(404).json({
-          message: "Assigned user not found",
+          message: "Assignee not found",
         });
       }
     }
 
     const ticket = await Ticket.create({
-      title,
-      description,
-      priority,
-      status,
+      title: title.trim(),
+      description: description || "",
+      priority: priority || "Medium",
+      status: status || "To Do",
       assignee: assignee || null,
       projectId,
     });
@@ -71,20 +97,27 @@ const createTicket = async (req, res) => {
       .populate("projectId", "title");
 
     return res.status(201).json({
-      message: "Ticket created successfully!",
+      message: "Ticket created successfully",
       ticket: populatedTicket,
     });
   } catch (error) {
+    console.error("Create ticket error:", error);
+
     return res.status(500).json({
-      message: error.message || "Failed to create ticket",
+      message: "Server error while creating ticket",
     });
   }
 };
 
-// Get Tickets by Project
+// ========================================
+// GET TICKETS BY PROJECT
+// DAY 10 - SEARCH AND FILTERS
+// ========================================
+
 const getTicketsByProject = async (req, res) => {
   try {
     const { projectId } = req.params;
+    const { status, priority, assignee, search } = req.query;
 
     const project = await Project.findById(projectId);
 
@@ -94,19 +127,78 @@ const getTicketsByProject = async (req, res) => {
       });
     }
 
-    const isOwner = project.owner.toString() === req.user._id.toString();
-
-    const isMember = project.teamMembers.some(
-      (member) => member.toString() === req.user._id.toString()
-    );
-
-    if (!isOwner && !isMember) {
+    if (!isProjectMember(project, req.user._id)) {
       return res.status(403).json({
         message: "You are not authorized to view these tickets",
       });
     }
 
-    const tickets = await Ticket.find({ projectId })
+    const allowedStatuses = ["To Do", "In Progress", "Done"];
+    const allowedPriorities = ["Low", "Medium", "High"];
+
+    const query = {
+      projectId,
+    };
+
+    // Filter by status
+    if (status) {
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          message: "Invalid ticket status",
+        });
+      }
+
+      query.status = status;
+    }
+
+    // Filter by priority
+    if (priority) {
+      if (!allowedPriorities.includes(priority)) {
+        return res.status(400).json({
+          message: "Invalid ticket priority",
+        });
+      }
+
+      query.priority = priority;
+    }
+
+    // Filter by assignee
+    if (assignee === "unassigned") {
+      query.assignee = null;
+    } else if (assignee) {
+      if (!/^[0-9a-fA-F]{24}$/.test(assignee)) {
+        return res.status(400).json({
+          message: "Invalid assignee ID",
+        });
+      }
+
+      query.assignee = assignee;
+    }
+
+    // Search by ticket title or description
+    if (search && search.trim()) {
+      const escapedSearch = search.trim().replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+      );
+
+      query.$or = [
+        {
+          title: {
+            $regex: escapedSearch,
+            $options: "i",
+          },
+        },
+        {
+          description: {
+            $regex: escapedSearch,
+            $options: "i",
+          },
+        },
+      ];
+    }
+
+    const tickets = await Ticket.find(query)
       .populate("assignee", "name email")
       .populate("projectId", "title")
       .sort({ createdAt: -1 });
@@ -116,18 +208,24 @@ const getTicketsByProject = async (req, res) => {
       tickets,
     });
   } catch (error) {
+    console.error("Get tickets error:", error);
+
     return res.status(500).json({
-      message: error.message || "Failed to fetch tickets",
+      message: "Server error while fetching tickets",
     });
   }
 };
 
-// Update Ticket
+// ========================================
+// UPDATE TICKET
+// ========================================
+
 const updateTicket = async (req, res) => {
   try {
+    const { id } = req.params;
     const { title, description, priority, status, assignee } = req.body;
 
-    const ticket = await Ticket.findById(req.params.id);
+    const ticket = await Ticket.findById(id);
 
     if (!ticket) {
       return res.status(404).json({
@@ -143,48 +241,85 @@ const updateTicket = async (req, res) => {
       });
     }
 
-    const isOwner = project.owner.toString() === req.user._id.toString();
-
-    const isMember = project.teamMembers.some(
-      (member) => member.toString() === req.user._id.toString()
-    );
-
-    if (!isOwner && !isMember) {
+    if (!isProjectMember(project, req.user._id)) {
       return res.status(403).json({
         message: "You are not authorized to update this ticket",
       });
     }
 
-    if (assignee !== undefined && assignee !== null && assignee !== "") {
-      const isProjectMember =
-        project.owner.toString() === assignee ||
-        project.teamMembers.some(
-          (member) => member.toString() === assignee
-        );
-
-      if (!isProjectMember) {
+    if (title !== undefined) {
+      if (typeof title !== "string" || title.trim().length < 2) {
         return res.status(400).json({
-          message: "Assignee must belong to this project",
+          message: "Ticket title must be at least 2 characters",
         });
       }
 
-      const userExists = await User.findById(assignee);
-
-      if (!userExists) {
-        return res.status(404).json({
-          message: "Assigned user not found",
+      if (title.trim().length > 100) {
+        return res.status(400).json({
+          message: "Ticket title cannot exceed 100 characters",
         });
       }
 
-      ticket.assignee = assignee;
-    } else if (assignee === null || assignee === "") {
-      ticket.assignee = null;
+      ticket.title = title.trim();
     }
 
-    if (title !== undefined) ticket.title = title;
-    if (description !== undefined) ticket.description = description;
-    if (priority !== undefined) ticket.priority = priority;
-    if (status !== undefined) ticket.status = status;
+    if (description !== undefined) {
+      if (typeof description !== "string") {
+        return res.status(400).json({
+          message: "Invalid ticket description",
+        });
+      }
+
+      ticket.description = description.trim();
+    }
+
+    if (priority !== undefined) {
+      if (!["Low", "Medium", "High"].includes(priority)) {
+        return res.status(400).json({
+          message: "Invalid ticket priority",
+        });
+      }
+
+      ticket.priority = priority;
+    }
+
+    if (status !== undefined) {
+      if (!["To Do", "In Progress", "Done"].includes(status)) {
+        return res.status(400).json({
+          message: "Invalid ticket status",
+        });
+      }
+
+      ticket.status = status;
+    }
+
+    if (assignee !== undefined) {
+      if (assignee === null || assignee === "") {
+        ticket.assignee = null;
+      } else {
+        if (!/^[0-9a-fA-F]{24}$/.test(assignee)) {
+          return res.status(400).json({
+            message: "Invalid assignee ID",
+          });
+        }
+
+        if (!isAssignableMember(project, assignee)) {
+          return res.status(400).json({
+            message: "Assignee must belong to this project",
+          });
+        }
+
+        const assignedUser = await User.findById(assignee);
+
+        if (!assignedUser) {
+          return res.status(404).json({
+            message: "Assignee not found",
+          });
+        }
+
+        ticket.assignee = assignee;
+      }
+    }
 
     await ticket.save();
 
@@ -193,20 +328,27 @@ const updateTicket = async (req, res) => {
       .populate("projectId", "title");
 
     return res.status(200).json({
-      message: "Ticket updated successfully!",
+      message: "Ticket updated successfully",
       ticket: updatedTicket,
     });
   } catch (error) {
+    console.error("Update ticket error:", error);
+
     return res.status(500).json({
-      message: error.message || "Failed to update ticket",
+      message: "Server error while updating ticket",
     });
   }
 };
 
-// Delete Ticket
+// ========================================
+// DELETE TICKET
+// ========================================
+
 const deleteTicket = async (req, res) => {
   try {
-    const ticket = await Ticket.findById(req.params.id);
+    const { id } = req.params;
+
+    const ticket = await Ticket.findById(id);
 
     if (!ticket) {
       return res.status(404).json({
@@ -222,38 +364,43 @@ const deleteTicket = async (req, res) => {
       });
     }
 
-    const isOwner = project.owner.toString() === req.user._id.toString();
-
-    if (!isOwner) {
+    // Only the project owner can delete tickets
+    if (String(project.owner) !== String(req.user._id)) {
       return res.status(403).json({
         message: "Only the project owner can delete tickets",
       });
     }
 
-    await Ticket.findByIdAndDelete(req.params.id);
+    await Ticket.findByIdAndDelete(id);
 
     return res.status(200).json({
-      message: "Ticket deleted successfully!",
+      message: "Ticket deleted successfully",
     });
   } catch (error) {
+    console.error("Delete ticket error:", error);
+
     return res.status(500).json({
-      message: error.message || "Failed to delete ticket",
+      message: "Server error while deleting ticket",
     });
   }
 };
 
-// Assign Ticket
+// ========================================
+// ASSIGN TICKET
+// ========================================
+
 const assignTicket = async (req, res) => {
   try {
+    const { id } = req.params;
     const { assignee } = req.body;
 
-    if (!assignee) {
+    if (!assignee || !/^[0-9a-fA-F]{24}$/.test(assignee)) {
       return res.status(400).json({
-        message: "Assignee user ID is required",
+        message: "A valid assignee ID is required",
       });
     }
 
-    const ticket = await Ticket.findById(req.params.id);
+    const ticket = await Ticket.findById(id);
 
     if (!ticket) {
       return res.status(404).json({
@@ -269,35 +416,23 @@ const assignTicket = async (req, res) => {
       });
     }
 
-    const isOwner = project.owner.toString() === req.user._id.toString();
-
-    const isMember = project.teamMembers.some(
-      (member) => member.toString() === req.user._id.toString()
-    );
-
-    if (!isOwner && !isMember) {
+    if (!isProjectMember(project, req.user._id)) {
       return res.status(403).json({
         message: "You are not authorized to assign this ticket",
       });
     }
 
-    const isProjectMember =
-      project.owner.toString() === assignee ||
-      project.teamMembers.some(
-        (member) => member.toString() === assignee
-      );
-
-    if (!isProjectMember) {
+    if (!isAssignableMember(project, assignee)) {
       return res.status(400).json({
         message: "Assignee must belong to this project",
       });
     }
 
-    const userExists = await User.findById(assignee);
+    const assignedUser = await User.findById(assignee);
 
-    if (!userExists) {
+    if (!assignedUser) {
       return res.status(404).json({
-        message: "Assigned user not found",
+        message: "Assignee not found",
       });
     }
 
@@ -309,15 +444,21 @@ const assignTicket = async (req, res) => {
       .populate("projectId", "title");
 
     return res.status(200).json({
-      message: "Ticket assigned successfully!",
+      message: "Ticket assigned successfully",
       ticket: updatedTicket,
     });
   } catch (error) {
+    console.error("Assign ticket error:", error);
+
     return res.status(500).json({
-      message: error.message || "Failed to assign ticket",
+      message: "Server error while assigning ticket",
     });
   }
 };
+
+// ========================================
+// EXPORT CONTROLLERS
+// ========================================
 
 module.exports = {
   createTicket,
